@@ -54,6 +54,11 @@ input[type=text]:focus{outline:none;border-color:var(--akcent)}
 .odpowiedz .pod{font-size:16px;margin-bottom:14px;color:var(--szary)}
 .odpowiedz .uwaga-krag{font-size:15px;line-height:1.6;color:var(--tekst);background:rgba(255,255,255,.55);
   border-radius:9px;padding:12px 14px;margin-top:14px}
+/* ramka o wodzie jest drugorzedna - dane o niej sa slabsze niz o warstwach */
+.odpowiedz.druga{border-width:1px;padding:18px}
+.odpowiedz.druga .glowna{font-size:30px}
+.odpowiedz.druga .naglowek{font-size:13px}
+.odpowiedz.druga .werdykt{font-size:16px;font-weight:400}
 .odpowiedz .werdykt{font-size:18px;font-weight:600;line-height:1.5;padding-top:14px;border-top:1px solid rgba(0,0,0,.14)}
 .odpowiedz.tak .naglowek,.odpowiedz.tak .glowna,.odpowiedz.tak .werdykt{color:var(--dobry)}
 .odpowiedz.moze .naglowek,.odpowiedz.moze .glowna,.odpowiedz.moze .werdykt{color:var(--uwaga)}
@@ -111,7 +116,7 @@ details.male-wyj div{font-size:14px;color:var(--szary);padding-top:8px}
 <div class="zawartosc">
 
 <h1>Gdzie woda</h1>
-<p class="podtytul">Wpisz adres, a dostaniesz odpowiedź: na ilu metrach ludzie w tej okolicy trafiali na wodę i czy ręczny zestaw tam sięgnie.</p>
+<p class="podtytul">Wpisz adres, a zobaczysz, przez co trzeba się tam przewiercić — i czy ręczny zestaw przejdzie. Woda niżej, jako dodatek, bo o niej dane są słabsze.</p>
 
 <div class="karta">
   <label for="adres">Adres działki</label>
@@ -136,8 +141,9 @@ details.male-wyj div{font-size:14px;color:var(--szary);padding-top:8px}
 <div id="status"></div>
 
 <div class="wyniki" id="wyniki">
-  <div id="odpowiedz"></div>
+  <div id="odpowiedz-skala"></div>
   <div class="male" id="male"></div>
+  <div id="odpowiedz"></div>
 
   <div class="podmapa" id="podmapa">
     <button data-m="mapa" class="wybrany">Mapa</button>
@@ -352,6 +358,73 @@ async function pobierzPomiary(lat, lon, m) {
 }
 
 /* ---------- odpowiedz ---------- */
+/* ===== GLOWNA ODPOWIEDZ: co pod dzialka =====
+   To jest najpewniejsza rzecz w calej bazie. Odwiert ma wprost zapisane,
+   w jakiej warstwie sie zatrzymal, a geologia nie zmienia sie z roku na rok. */
+const BLISKIE_OTWORY = 8;
+function zbudujSkale(otwory) {
+  const bl = otwory.slice(0, BLISKIE_OTWORY);
+  const wPiaskach = bl.filter(o => skalny(o.strat) === false && o.glebokosc != null)
+                      .sort((a,b) => b.glebokosc - a.glebokosc);
+  const wSkale = bl.filter(o => skalny(o.strat) === true && o.glebokosc != null)
+                   .sort((a,b) => a.glebokosc - b.glebokosc);
+  const piaskiDo = wPiaskach.length ? wPiaskach[0] : null;
+  const skalaNa = wSkale.length ? wSkale[0] : null;
+
+  if (!bl.length) {
+    return '<div class="odpowiedz moze"><div class="naglowek">Co pod działką</div>' +
+      '<div class="glowna">?</div><div class="pod">Brak odwiertów w tym promieniu.</div>' +
+      '<div class="werdykt">Zwiększ promień szukania.</div></div>';
+  }
+
+  let klasa, werdykt;
+  if (skalaNa && skalaNa.glebokosc <= 10) {
+    klasa = 'nie';
+    werdykt = 'Lita skała zaczyna się bardzo płytko — odwiert ' + dist(skalaNa.odl) + ' stąd zatrzymał się na ' +
+      skalaNa.glebokosc + ' m w warstwie „' + skalaNa.strat + '". Ręczny świder tam nie wejdzie. ' +
+      'Jadąc tam, licz się z tym, że skończycie po dwóch metrach.';
+  } else if (skalaNa && skalaNa.glebokosc <= 25) {
+    klasa = 'moze';
+    werdykt = 'Skała jest nie głębiej niż ' + skalaNa.glebokosc + ' m — tyle miał odwiert ' + dist(skalaNa.odl) +
+      ' stąd, zakończony w warstwie „' + skalaNa.strat + '". Ręczna płuczka ma tam mało miejsca na pracę.';
+  } else if (piaskiDo && piaskiDo.glebokosc >= 15) {
+    klasa = 'tak';
+    werdykt = 'Piaski są grube: odwiert ' + dist(piaskiDo.odl) + ' stąd przeszedł ' + piaskiDo.glebokosc +
+      ' m i wciąż był w czwartorzędzie. Dla ręcznego zestawu to dobry teren.';
+  } else if (piaskiDo) {
+    klasa = 'moze';
+    werdykt = 'Piaski potwierdzone tylko do ' + piaskiDo.glebokosc + ' m (odwiert ' + dist(piaskiDo.odl) +
+      ' stąd). Głębiej nikt tu płytko nie wiercił, więc nie wiadomo, co jest pod spodem.';
+  } else {
+    klasa = 'moze';
+    werdykt = 'Wszystkie odwierty w pobliżu są głębokie (powyżej 25 m) i kończą się w litej skale. ' +
+      'O płytkich warstwach nie mówią nic — ani dobrze, ani źle.';
+  }
+
+  const najbl = bl[0];
+  const h = '<div class="odpowiedz ' + klasa + '">' +
+    '<div class="naglowek">Co pod działką — przez co trzeba się przewiercić</div>' +
+    '<div class="dwie">' +
+      (piaskiDo
+        ? '<div><div class="etyk">Piaski potwierdzone do</div><div class="glowna">' + piaskiDo.glebokosc + ' m</div>' +
+          '<div class="opisek">odwiert ' + dist(piaskiDo.odl) + ' stąd, wciąż w czwartorzędzie</div></div>'
+        : '<div><div class="etyk">Piaski potwierdzone do</div><div class="glowna">—</div>' +
+          '<div class="opisek">żaden odwiert nie skończył się w piaskach</div></div>') +
+      (skalaNa
+        ? '<div><div class="etyk">Lita skała stwierdzona na</div><div class="glowna">' + skalaNa.glebokosc + ' m</div>' +
+          '<div class="opisek">odwiert ' + dist(skalaNa.odl) + ' stąd, warstwa „' + skalaNa.strat + '"</div></div>'
+        : '') +
+    '</div>' +
+    '<div class="pod">Najbliższy odwiert: ' + dist(najbl.odl) + ' stąd, ' + najbl.glebokosc + ' m, na dnie ' +
+      (najbl.strat || 'brak danych') + '.</div>' +
+    '<div class="werdykt">' + werdykt + '</div>' +
+    '<div class="uwaga-krag">Ta część jest najpewniejsza w całym narzędziu — odwiert ma wprost zapisane, ' +
+      'w jakiej warstwie się zatrzymał, a geologia nie zmienia się z roku na rok. ' +
+      'Ale mówi o swoim punkcie: pół kilometra dalej może być inaczej.</div>' +
+    '</div>';
+  return h;
+}
+
 /* Liczy sie sasiedztwo, nie caly powiat: bierzemy najblizsze pomiary,
    a nie najplytszy z kilkunastu kilometrow. */
 const BLISKIE = 5;
@@ -412,8 +485,8 @@ function zbudujOdpowiedz(pomiary, otwory, wysokosc) {
       ' m), więc geologia zmienia się tu z działki na działkę. Odwiert próbny to jedyna pewność.';
   }
 
-  const h = '<div class="odpowiedz ' + klasa + '">' +
-    '<div class="naglowek">Najbliższy punkt pomiarowy — ' + dist(najblizszy.odl) + ' stąd' +
+  const h = '<div class="odpowiedz druga ' + klasa + '">' +
+    '<div class="naglowek">A woda? Najbliższy punkt pomiarowy — ' + dist(najblizszy.odl) + ' stąd' +
       (najblizszy.miejscowosc ? ', ' + najblizszy.miejscowosc : '') + '</div>' +
     '<div class="dwie">' +
       '<div><div class="etyk">Trzeba przewiercić</div><div class="glowna">' + najblizszy.wodaNaw + ' m</div>' +
@@ -441,8 +514,6 @@ function kaflikiMale(pomiary, otwory, wysokosc) {
   if (z.length > 1)
     h += k('Woda w pobliskich pomiarach', z[0].wodaNaw + '–' + z[z.length-1].wodaNaw + ' m',
            z.length + ' najbliższych punktów, do ' + dist(bliskie[bliskie.length-1].odl));
-  if (piaski.length)
-    h += k('Piaski sięgają co najmniej', Math.max(...piaski.map(o => o.glebokosc)) + ' m', 'najgłębszy odwiert w czwartorzędzie');
   h += k('Odwierty w promieniu', otwory.length, dist(promien) + ' od działki');
   if (wysokosc != null)
     h += k('Wysokość terenu', wysokosc + ' m', 'nad poziomem morza');
@@ -580,6 +651,7 @@ async function szukaj() {
     }
     schowajStatus();
     el('wyniki').style.display = 'block';
+    el('odpowiedz-skala').innerHTML = zbudujSkale(otwory);
     el('odpowiedz').innerHTML = zbudujOdpowiedz(pomiary, otwory, wysokosc).html;
     el('male').innerHTML = kaflikiMale(pomiary, otwory, wysokosc);
 
